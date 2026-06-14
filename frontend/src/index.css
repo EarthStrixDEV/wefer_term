@@ -27,6 +27,8 @@
   
   --titlebar-height: 40px;
   --sidebar-width: 260px;
+  --sidebar-width-collapsed: 70px;
+  --dashboard-width-collapsed: 75px;
 }
 
 * {
@@ -146,6 +148,13 @@ body {
   justify-content: space-between;
   padding: 20px 16px;
   flex-shrink: 0;
+  transition: width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease;
+}
+
+.sidebar.collapsed {
+  width: var(--sidebar-width-collapsed);
+  padding: 20px 8px;
+  align-items: center;
 }
 
 .sidebar-brand {
@@ -202,6 +211,13 @@ body {
   color: var(--accent-mint);
   border: 1px solid rgba(10, 147, 150, 0.3);
   box-shadow: var(--border-glow);
+}
+
+.sidebar.collapsed .nav-item {
+  justify-content: center;
+  padding: 10px;
+  width: 44px;
+  height: 44px;
 }
 
 /* Clock CSS Widget */
@@ -785,4 +801,238 @@ body {
 .animate-mascot-working {
   animation: mascot-working-pulse 2s infinite ease-in-out;
   border-color: var(--accent-color) !important;
+}
+
+/* Workspace Switcher Dropdown */
+.workspace-switcher-container {
+  position: relative;
+  user-select: none;
+}
+
+.workspace-switcher-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.workspace-switcher-trigger:hover {
+  background: var(--bg-surface-hover);
+  border-color: var(--border-color-focus);
+  box-shadow: var(--border-glow);
+}
+
+.workspace-switcher-dropdown {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 290px;
+  background: rgba(0, 30, 41, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color-focus);
+  border-radius: 10px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5), var(--border-glow);
+  padding: 8px 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  animation: dropdown-fade-in 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes dropdown-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.dropdown-header {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  padding: 6px 14px;
+  border-bottom: 1px solid rgba(10, 147, 150, 0.1);
+  margin-bottom: 4px;
+}
+
+.dropdown-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  gap: 8px;
+}
+
+.dropdown-item:hover {
+  background: rgba(148, 210, 189, 0.1);
+  color: var(--text-primary);
+}
+
+.dropdown-item.active {
+  background: rgba(10, 147, 150, 0.15);
+  color: var(--accent-mint);
+  font-weight: 600;
+}
+
+.dropdown-item-details {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+  flex-grow: 1;
+}
+
+.dropdown-item-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dropdown-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dropdown-item-path {
+  font-size: 10px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  margin-top: 1px;
+}
+
+.dropdown-item-remove-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 4px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  flex-shrink: 0;
+}
+
+.dropdown-item-remove-btn:hover {
+  color: var(--accent-red);
+  background: rgba(174, 32, 18, 0.15);
+}
+
+.dropdown-divider {
+  height: 1px;
+  background: rgba(10, 147, 150, 0.15);
+  margin: 6px 0;
+}
+
+.dropdown-action-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-mint);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  width: 100%;
+  text-align: left;
+}
+
+.dropdown-action-btn:hover {
+  background: rgba(148, 210, 189, 0.08);
+  color: var(--text-primary);
+}
+
+/* Drag and Drop hover target glow style */
+.terminal-container.drop-target {
+  border: 2.5px dashed var(--accent-mint) !important;
+  box-shadow: 0 0 15px rgba(148, 210, 189, 0.5) !important;
+  transform: scale(0.985);
+  transition: all 0.15s ease;
+}
+
+/* Custom Tooltip Styling */
+.wefer-tooltip {
+  position: relative;
+}
+
+.wefer-tooltip::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  background: rgba(0, 18, 25, 0.95);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--accent-mint);
+  color: var(--text-primary);
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 10000;
+  box-shadow: 0 4px 15px rgba(0,0,0,0.4), var(--border-glow);
+}
+
+/* Tooltip placements */
+.tooltip-right::after {
+  top: 50%;
+  left: calc(100% + 12px);
+  transform: translateY(-50%) scale(0.95);
+}
+
+.tooltip-left::after {
+  top: 50%;
+  right: calc(100% + 12px);
+  transform: translateY(-50%) scale(0.95);
+}
+
+.wefer-tooltip:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+/* Sidebar toggler helper styles */
+.sidebar-toggler {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  padding: 8px 0;
+  border-top: 1px solid var(--border-color);
+  margin-top: 10px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sidebar-toggler:hover {
+  color: var(--accent-mint);
 }

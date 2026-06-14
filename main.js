@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const { execFile } = require('child_process');
+const os = require('os');
 
 // node-pty is a native module; surface a load failure to the UI instead of crashing.
 let pty = null;
@@ -27,6 +28,29 @@ process.on('uncaughtException', (err) => {
 });
 
 let mainWindow;
+
+// --- OS System Stats -----------------------------------------------------------
+
+let prevCpuSample = null;
+
+function sampleCpu() {
+  const cpus = os.cpus();
+  let idle = 0, total = 0;
+  for (const cpu of cpus) {
+    for (const type of Object.keys(cpu.times)) total += cpu.times[type];
+    idle += cpu.times.idle;
+  }
+  return { idle: idle / cpus.length, total: total / cpus.length };
+}
+
+function getCpuPercent() {
+  const cur = sampleCpu();
+  if (!prevCpuSample) { prevCpuSample = cur; return 0; }
+  const deltaIdle = cur.idle - prevCpuSample.idle;
+  const deltaTotal = cur.total - prevCpuSample.total;
+  prevCpuSample = cur;
+  return deltaTotal === 0 ? 0 : Math.round((1 - deltaIdle / deltaTotal) * 100);
+}
 
 // Live PTY sessions keyed by agentId. An Agent has at most one Session.
 // Value shape: { proc, shell } — shell is 'cmd' | 'powershell'.
@@ -91,6 +115,14 @@ function createWindow() {
 }
 
 app.on('ready', createWindow);
+
+const statsInterval = setInterval(() => {
+  const cpu = getCpuPercent();
+  const memUsedGB = parseFloat(((os.totalmem() - os.freemem()) / 1e9).toFixed(1));
+  sendToRenderer('system-stats', { cpu, memUsedGB });
+}, 3000);
+
+app.on('will-quit', () => clearInterval(statsInterval));
 
 app.on('before-quit', killAllSessions);
 

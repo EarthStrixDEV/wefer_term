@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   setWorkspace: (path) => ipcRenderer.invoke('set-workspace', path),
   checkCliAvailability: () => ipcRenderer.invoke('cli-availability'),
 
+  // OS system stats stream — returns an unsubscribe fn for StrictMode cleanup
+  onSystemStats: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('system-stats', handler);
+    return () => ipcRenderer.removeListener('system-stats', handler);
+  },
+
   // PTY event streams — each returns an unsubscribe fn (required for StrictMode cleanup)
   onPtyData: (callback) => {
     const handler = (event, data) => callback(data);

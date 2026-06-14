@@ -22,14 +22,16 @@ import {
   Sparkles,
   Zap,
   Globe,
-  FolderOpen
+  FolderOpen,
+  ChevronLeft,
+  ChevronRight,
+  Menu
 } from 'lucide-react';
 import TerminalView from './TerminalView';
 
 // Pure helper functions to satisfy React Compiler purity linter
 const getTimestampId = () => Date.now();
-const getRandomTokenCount = () => Math.floor(Math.random() * 3000) + 1200;
-const getRandomAdditionalContext = () => Math.floor(Math.random() * 8000) + 2000;
+const DEFAULT_GRID_SLOTS = ['claude-code', 'antigravity-cli', 'codex-cli', 'npm-server'];
 
 function App() {
   // Navigation tabs
@@ -69,29 +71,20 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // System Stats Simulation
+  // System Stats — real-time OS data pushed from main process every 3s
   const [systemStats, setSystemStats] = useState({
-    cpu: 24,
-    memory: 4.8,
+    cpu: 0,
+    memory: 0,
     activeTasks: 2,
     commandsCount: 15
   });
 
   useEffect(() => {
-    const statsInterval = setInterval(() => {
-      setSystemStats(prev => {
-        const changeCpu = (Math.random() - 0.5) * 8;
-        const newCpu = Math.max(5, Math.min(95, Math.round(prev.cpu + changeCpu)));
-        const changeMem = (Math.random() - 0.5) * 0.2;
-        const newMem = Math.max(2.0, Math.min(16.0, parseFloat((prev.memory + changeMem).toFixed(1))));
-        return {
-          ...prev,
-          cpu: newCpu,
-          memory: newMem
-        };
-      });
-    }, 3000);
-    return () => clearInterval(statsInterval);
+    if (!window.electronAPI?.onSystemStats) return;
+    const unsub = window.electronAPI.onSystemStats(({ cpu, memUsedGB }) => {
+      setSystemStats(prev => ({ ...prev, cpu, memory: memUsedGB }));
+    });
+    return unsub;
   }, []);
 
   // Agents list
@@ -203,21 +196,160 @@ function App() {
   const [selectedAgentId, setSelectedAgentId] = useState('claude-code');
 
   // Real PTY terminal: workspace path, CLI availability, and a ref to the active xterm view.
-  const [workspace, setWorkspace] = useState('');
+  const [workspace, setWorkspace] = useState(() => {
+    const saved = localStorage.getItem('wefer_recent_workspaces');
+    try {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0].path;
+      }
+    } catch {
+      /* ignore */
+    }
+    return '';
+  });
   const [cliAvail, setCliAvail] = useState({});
 
+  // Customize Workspace States
+  const [terminalFontSize, setTerminalFontSize] = useState(() => {
+    const saved = localStorage.getItem('wefer_terminal_font_size');
+    return saved ? Number(saved) : 13;
+  });
+
+  const [terminalFontFamily, setTerminalFontFamily] = useState(() => {
+    const saved = localStorage.getItem('wefer_terminal_font_family');
+    return saved || 'Fira Code';
+  });
+
+  const [terminalTheme, setTerminalTheme] = useState(() => {
+    const saved = localStorage.getItem('wefer_terminal_theme');
+    return saved || 'dark-teal';
+  });
+
+  // Drag and Drop Grid Slots States
+  const [draggedIndex, setDraggedIndex] = useState(null);
+  const [draggedWsId, setDraggedWsId] = useState(null);
+
+  // Sidebar & Dashboard collapsing states
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isDashboardCollapsed, setIsDashboardCollapsed] = useState(false);
+
+  // Auto-collapse based on window resize
+  useEffect(() => {
+    const handleResize = () => {
+      const width = window.innerWidth;
+      if (width < 1100) {
+        setIsSidebarCollapsed(true);
+      } else {
+        setIsSidebarCollapsed(false);
+      }
+      if (width < 1300) {
+        setIsDashboardCollapsed(true);
+      } else {
+        setIsDashboardCollapsed(false);
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    handleResize(); // check on mount
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Multi-workspace management states
-  const [workspaces, setWorkspaces] = useState([]);
-  const [activeWorkspaceId, setActiveWorkspaceId] = useState('');
+  const [workspaces, setWorkspaces] = useState(() => {
+    const saved = localStorage.getItem('wefer_recent_workspaces');
+    try {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+    return [];
+  });
+
+  const [activeWorkspaceId, setActiveWorkspaceId] = useState(() => {
+    const saved = localStorage.getItem('wefer_recent_workspaces');
+    try {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed[0].id;
+      }
+    } catch {
+      /* ignore */
+    }
+    return '';
+  });
+
   // Track which workspaces have been activated at least once so we only mount
   // their terminal grids after the user visits them (lazy init).
-  const [visitedWorkspaces, setVisitedWorkspaces] = useState(new Set());
+  const [visitedWorkspaces, setVisitedWorkspaces] = useState(() => {
+    const saved = localStorage.getItem('wefer_recent_workspaces');
+    try {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return new Set([parsed[0].id]);
+      }
+    } catch {
+      /* ignore */
+    }
+    return new Set();
+  });
+
+  // Workspace Switcher Dropdown visibility
+  const [isWsDropdownOpen, setIsWsDropdownOpen] = useState(false);
+  const wsDropdownRef = useRef(null);
+
+  // Click outside listener for Workspace Dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (wsDropdownRef.current && !wsDropdownRef.current.contains(event.target)) {
+        setIsWsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Per-workspace grid slots and shell preferences.
   // Shape: { [wsId]: string[] } and { [wsId]: { [agentId]: 'cmd'|'powershell' } }
-  const DEFAULT_GRID_SLOTS = ['claude-code', 'antigravity-cli', 'codex-cli', 'npm-server'];
-  const [gridSlotsByWs, setGridSlotsByWs] = useState({});
-  const [agentShellsByWs, setAgentShellsByWs] = useState({});
+  const [gridSlotsByWs, setGridSlotsByWs] = useState(() => {
+    const saved = localStorage.getItem('wefer_recent_workspaces');
+    try {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const slots = {};
+          parsed.forEach(ws => {
+            slots[ws.id] = [...DEFAULT_GRID_SLOTS];
+          });
+          return slots;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return {};
+  });
+
+  const [agentShellsByWs, setAgentShellsByWs] = useState(() => {
+    const saved = localStorage.getItem('wefer_recent_workspaces');
+    try {
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const shells = {};
+          parsed.forEach(ws => {
+            shells[ws.id] = {};
+          });
+          return shells;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+    return {};
+  });
 
   const slotsOf = (wsId) => gridSlotsByWs[wsId] ?? DEFAULT_GRID_SLOTS;
   const shellOfWs = (wsId, agentId) => agentShellsByWs[wsId]?.[agentId] ?? 'cmd';
@@ -227,9 +359,41 @@ function App() {
   }));
 
   const selectAndLaunchWorkspace = (ws) => {
+    // Kill old sessions if we are switching from a different workspace
+    if (activeWorkspaceId && activeWorkspaceId !== ws.id) {
+      const oldSlots = gridSlotsByWs[activeWorkspaceId] ?? DEFAULT_GRID_SLOTS;
+      oldSlots.forEach(agentId => {
+        if (window.electronAPI) {
+          window.electronAPI.killSession(`${activeWorkspaceId}:${agentId}`);
+        }
+      });
+      // Clear live outputs for the closed sessions to reclaim memory
+      setLiveTerminalOutputs(prev => {
+        const next = { ...prev };
+        oldSlots.forEach(agentId => {
+          delete next[`${activeWorkspaceId}:${agentId}`];
+        });
+        return next;
+      });
+    }
+
     setWorkspace(ws.path);
     setActiveWorkspaceId(ws.id);
     setVisitedWorkspaces(prev => new Set([...prev, ws.id]));
+    setIsWsDropdownOpen(false);
+
+    if (window.electronAPI) {
+      window.electronAPI.setWorkspace(ws.path);
+    }
+
+    // Save/Rearrange workspaces to place the chosen one at the top of the history
+    setWorkspaces(prev => {
+      const filtered = prev.filter(w => w.id !== ws.id);
+      const updated = [ws, ...filtered].slice(0, 5);
+      localStorage.setItem('wefer_recent_workspaces', JSON.stringify(updated));
+      return updated;
+    });
+
     setActiveTab('terminal');
   };
 
@@ -246,28 +410,32 @@ function App() {
       }
       const name = path.split(/[\\/]/).pop() || path;
       const newWs = { id: `ws-${getTimestampId()}`, name, path };
-      setWorkspaces(prev => [...prev, newWs]);
-      // Initialize per-workspace state immediately so the grid renders correctly.
+      
+      // Initialize slots before selecting
       setGridSlotsByWs(prev => ({ ...prev, [newWs.id]: [...DEFAULT_GRID_SLOTS] }));
       setAgentShellsByWs(prev => ({ ...prev, [newWs.id]: {} }));
+      
       selectAndLaunchWorkspace(newWs);
     }
   };
 
-  // Remove a workspace and kill all its PTY sessions. Sessions are per-workspace
-  // so removing a workspace should clean up all its PTYs.
+  // Remove a workspace and kill all its PTY sessions.
   const handleRemoveWorkspace = (wsId, e) => {
-    e.stopPropagation();
+    if (e) e.stopPropagation();
     // Kill each session for this workspace before removing.
     const slots = gridSlotsByWs[wsId] ?? DEFAULT_GRID_SLOTS;
     slots.forEach(agentId => {
       window.electronAPI?.killSession(`${wsId}:${agentId}`);
     });
+    
     const remaining = workspaces.filter(w => w.id !== wsId);
     setWorkspaces(remaining);
+    localStorage.setItem('wefer_recent_workspaces', JSON.stringify(remaining));
+
     setVisitedWorkspaces(prev => { const s = new Set(prev); s.delete(wsId); return s; });
     setGridSlotsByWs(prev => { const n = { ...prev }; delete n[wsId]; return n; });
     setAgentShellsByWs(prev => { const n = { ...prev }; delete n[wsId]; return n; });
+    
     if (activeWorkspaceId === wsId) {
       if (remaining.length > 0) {
         selectAndLaunchWorkspace(remaining[0]);
@@ -278,7 +446,54 @@ function App() {
     }
   };
 
+  // Add a new terminal slot to the dynamic grid (up to 6)
+  const handleAddTerminalSlot = (wsId) => {
+    setGridSlotsByWs(prev => {
+      const currentSlots = prev[wsId] ?? [...DEFAULT_GRID_SLOTS];
+      if (currentSlots.length >= 6) {
+        alert("สามารถเพิ่มช่อง Terminal ได้สูงสุด 6 ช่องค่ะ!");
+        return prev;
+      }
+      // Add first available or default to claude-code
+      const newSlots = [...currentSlots, 'claude-code'];
+      return { ...prev, [wsId]: newSlots };
+    });
+  };
+
+  // Remove terminal slot at specific index and kill session
+  const handleKillTerminalSlot = (wsId, index) => {
+    setGridSlotsByWs(prev => {
+      const currentSlots = prev[wsId] ?? [...DEFAULT_GRID_SLOTS];
+      if (currentSlots.length <= 1) {
+        alert("ต้องมีอย่างน้อย 1 ช่อง Terminal นะคะ!");
+        return prev;
+      }
+      const agentId = currentSlots[index];
+      if (window.electronAPI) {
+        window.electronAPI.killSession(`${wsId}:${agentId}`);
+      }
+      
+      const newSlots = currentSlots.filter((_, i) => i !== index);
+      return { ...prev, [wsId]: newSlots };
+    });
+  };
+
+  // Swap slots position in grid layout
+  const swapTerminalSlots = (wsId, indexA, indexB) => {
+    if (indexA === indexB) return;
+    setGridSlotsByWs(prev => {
+      const slots = [...(prev[wsId] ?? DEFAULT_GRID_SLOTS)];
+      const temp = slots[indexA];
+      slots[indexA] = slots[indexB];
+      slots[indexB] = temp;
+      return { ...prev, [wsId]: slots };
+    });
+    setDraggedIndex(null);
+    setDraggedWsId(null);
+  };
+
   // Grid terminal layout states
+  // eslint-disable-next-line no-unused-vars
   const [terminalLayout, setTerminalLayout] = useState('single');
   // gridTerminalRefs keyed by sessionId (`${wsId}:${agentId}`) so each workspace's
   // terminals are independently addressable for clear/resize.
@@ -328,20 +543,28 @@ function App() {
 
   useEffect(() => {
     if (!window.electronAPI) return;
-    // Auto-create a default workspace from the system home dir so terminals are
-    // immediately usable when the user opens the Terminal tab — matching the old
-    // behaviour where the grid always worked without an explicit workspace bookmark.
-    window.electronAPI.getWorkspace().then(({ path }) => {
-      setWorkspace(path);
-      const name = path.split(/[\\/]/).pop() || path;
-      const defaultWs = { id: 'ws-default', name, path };
-      setWorkspaces([defaultWs]);
-      setGridSlotsByWs({ 'ws-default': ['claude-code', 'antigravity-cli', 'codex-cli', 'npm-server'] });
-      setAgentShellsByWs({ 'ws-default': {} });
-      setActiveWorkspaceId('ws-default');
-      setVisitedWorkspaces(new Set(['ws-default']));
-    });
+    
+    if (workspaces.length > 0) {
+      // Sync initial active workspace to Electron process CWD
+      const activeWs = workspaces[0];
+      window.electronAPI.setWorkspace(activeWs.path);
+    } else {
+      // Auto-create a default workspace from the system home dir if no history exists
+      window.electronAPI.getWorkspace().then(({ path }) => {
+        setWorkspace(path);
+        const name = path.split(/[\\/]/).pop() || path;
+        const defaultWs = { id: 'ws-default', name, path };
+        setWorkspaces([defaultWs]);
+        setGridSlotsByWs({ 'ws-default': [...DEFAULT_GRID_SLOTS] });
+        setAgentShellsByWs({ 'ws-default': {} });
+        setActiveWorkspaceId('ws-default');
+        setVisitedWorkspaces(new Set(['ws-default']));
+        localStorage.setItem('wefer_recent_workspaces', JSON.stringify([defaultWs]));
+      });
+    }
+    
     window.electronAPI.checkCliAvailability().then(setCliAvail);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Reflect a Session's live state on its Agent card (busy is per-agent).
@@ -573,7 +796,7 @@ function App() {
     } else {
       steps = [
         { type: 'info', text: 'Initializing task analyzer...' },
-        { type: 'info', text: `Tokens used: ${getRandomTokenCount()} (input) | processing...` },
+        { type: 'info', text: 'Processing...' },
         { type: 'success', text: 'Code generation completed.' },
         { type: 'success', text: 'Successfully applied code patches to local directory.' }
       ];
@@ -586,14 +809,7 @@ function App() {
         setIsRunningSimulation(false);
         setAgents(prev => prev.map(a => {
           if (a.id === selectedAgentId) {
-            const additionalContext = getRandomAdditionalContext();
-            return {
-              ...a,
-              status: 'idle',
-              contextUsed: Math.min(a.contextLimit, a.contextUsed + additionalContext),
-              totalTokens: a.totalTokens + additionalContext,
-              tasksRun: a.tasksRun + 1
-            };
+            return { ...a, status: 'idle', tasksRun: a.tasksRun + 1 };
           }
           return a;
         }));
@@ -667,81 +883,152 @@ function App() {
       <div className="app-container">
         
         {/* Sidebar */}
-        <aside className="sidebar">
-          <div className="sidebar-top">
-            <div className="sidebar-brand">
-              <div className="sidebar-brand-name">
-                <Sparkles size={20} className="text-mint" style={{ color: 'var(--accent-mint)' }} />
-                <span>Wefer Panel</span>
-              </div>
-              <div className="sidebar-brand-sub">AI ORCHESTRATION HUB</div>
+        <aside className={`sidebar ${isSidebarCollapsed ? 'collapsed' : ''}`}>
+          <div className="sidebar-top" style={{ width: '100%' }}>
+            <div className="sidebar-brand" style={{ 
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: isSidebarCollapsed ? 'center' : 'stretch',
+              position: 'relative',
+              width: '100%',
+              padding: isSidebarCollapsed ? '16px 0' : '16px 16px'
+            }}>
+              {!isSidebarCollapsed ? (
+                <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                    <div className="sidebar-brand-name" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Sparkles size={18} className="text-mint" style={{ color: 'var(--accent-mint)', flexShrink: 0 }} />
+                      <span style={{ fontWeight: 'bold' }}>Wefer Panel</span>
+                    </div>
+                    <button 
+                      className="sidebar-toggler-hamberger"
+                      onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                      title="Collapse Sidebar"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: 'var(--accent-mint)',
+                        cursor: 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '4px',
+                        borderRadius: '4px',
+                        transition: 'background 0.2s'
+                      }}
+                    >
+                      <Menu size={16} />
+                    </button>
+                  </div>
+                  <div className="sidebar-brand-sub" style={{ marginTop: '2px', paddingLeft: '26px' }}>AI ORCHESTRATION HUB</div>
+                </>
+              ) : (
+                <button 
+                  className="sidebar-toggler-hamberger wefer-tooltip tooltip-right"
+                  data-tooltip="Expand Sidebar"
+                  onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                  style={{
+                    background: 'transparent',
+                    border: 'none',
+                    color: 'var(--accent-mint)',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: '8px',
+                    borderRadius: '4px',
+                    transition: 'background 0.2s'
+                  }}
+                >
+                  <Menu size={18} />
+                </button>
+              )}
             </div>
 
             <nav className="nav-group">
               <div 
-                className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''}`}
+                className={`nav-item ${activeTab === 'dashboard' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
+                data-tooltip={isSidebarCollapsed ? "Dashboard Matrix" : undefined}
                 onClick={() => setActiveTab('dashboard')}
               >
                 <LayoutDashboard size={16} />
-                <span>Dashboard Matrix</span>
+                {!isSidebarCollapsed && <span>Dashboard Matrix</span>}
               </div>
               
               <div 
-                className={`nav-item ${activeTab === 'agents' ? 'active' : ''}`}
+                className={`nav-item ${activeTab === 'agents' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
+                data-tooltip={isSidebarCollapsed ? "Agent Profiles" : undefined}
                 onClick={() => setActiveTab('agents')}
               >
-                <Sliders size={16} />
-                <span>Agent Profiles</span>
+                <Code2 size={16} />
+                {!isSidebarCollapsed && <span>Agent Profiles</span>}
               </div>
 
               <div 
-                className={`nav-item ${activeTab === 'terminal' ? 'active' : ''}`}
+                className={`nav-item ${activeTab === 'customization' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
+                data-tooltip={isSidebarCollapsed ? "Workspace Customization" : undefined}
+                onClick={() => setActiveTab('customization')}
+              >
+                <Sliders size={16} />
+                {!isSidebarCollapsed && <span>Workspace Customization</span>}
+              </div>
+
+              <div 
+                className={`nav-item ${activeTab === 'terminal' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
+                data-tooltip={isSidebarCollapsed ? "Terminal Workspace" : undefined}
                 onClick={() => setActiveTab('terminal')}
               >
                 <Terminal size={16} />
-                <span>Terminal Workspace</span>
+                {!isSidebarCollapsed && <span>Terminal Workspace</span>}
               </div>
             </nav>
 
             {/* WORKSPACES SECTION */}
-            <div style={{ marginTop: '24px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 14px 8px', borderBottom: '1px solid rgba(10, 147, 150, 0.15)', marginBottom: '10px' }}>
-                <span style={{ fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                  Workspaces
-                </span>
-                <button 
-                  className="btn secondary" 
-                  style={{ padding: '2px 6px', height: '18px', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(148, 210, 189, 0.15)', border: '1px solid rgba(148, 210, 189, 0.3)', color: 'var(--accent-mint)' }}
-                  onClick={handleAddWorkspace}
-                  title="Add local directory as workspace"
-                >
-                  <Plus size={10} /> Add
-                </button>
-              </div>
+            <div style={{ marginTop: '24px', width: '100%' }}>
+              {!isSidebarCollapsed ? (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 14px 8px', borderBottom: '1px solid rgba(10, 147, 150, 0.15)', marginBottom: '10px' }}>
+                  <span style={{ fontSize: '10px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                    Workspaces
+                  </span>
+                  <button 
+                    className="btn secondary" 
+                    style={{ padding: '2px 6px', height: '18px', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center', gap: '2px', background: 'rgba(148, 210, 189, 0.15)', border: '1px solid rgba(148, 210, 189, 0.3)', color: 'var(--accent-mint)' }}
+                    onClick={handleAddWorkspace}
+                    title="Add local directory as workspace"
+                  >
+                    <Plus size={10} /> Add
+                  </button>
+                </div>
+              ) : (
+                <div style={{ borderBottom: '1px solid rgba(10, 147, 150, 0.15)', marginBottom: '10px' }}></div>
+              )}
               
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {workspaces.map(ws => (
                   <div 
                     key={ws.id}
-                    className={`nav-item ${activeWorkspaceId === ws.id && activeTab === 'terminal' && terminalLayout === 'grid' ? 'active' : ''}`}
+                    className={`nav-item ${activeWorkspaceId === ws.id && activeTab === 'terminal' && terminalLayout === 'grid' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
+                    data-tooltip={isSidebarCollapsed ? ws.name : undefined}
                     style={{ padding: '8px 12px', fontSize: '13px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
                     onClick={() => selectAndLaunchWorkspace(ws)}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
                       <FolderOpen size={14} style={{ color: activeWorkspaceId === ws.id ? 'var(--accent-mint)' : 'var(--text-secondary)' }} />
-                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{ws.name}</span>
+                      {!isSidebarCollapsed && <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{ws.name}</span>}
                     </div>
-                    <button
-                      className="btn danger"
-                      style={{ flexShrink: 0, padding: '2px 5px', height: '18px', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center' }}
-                      onClick={(e) => handleRemoveWorkspace(ws.id, e)}
-                      title={`Remove workspace "${ws.name}"`}
-                    >
-                      <X size={11} />
-                    </button>
+                    {!isSidebarCollapsed && (
+                      <button
+                        className="btn danger"
+                        style={{ flexShrink: 0, padding: '2px 5px', height: '18px', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center' }}
+                        onClick={(e) => handleRemoveWorkspace(ws.id, e)}
+                        title={`Remove workspace "${ws.name}"`}
+                      >
+                        <X size={11} />
+                      </button>
+                    )}
                   </div>
                 ))}
-                {workspaces.length === 0 && (
+                {workspaces.length === 0 && !isSidebarCollapsed && (
                   <div style={{ padding: '8px 14px', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
                     No workspaces. Click Add.
                   </div>
@@ -750,22 +1037,27 @@ function App() {
             </div>
           </div>
 
-          <div className="sidebar-footer">
+          <div className="sidebar-footer" style={{ width: '100%', alignItems: isSidebarCollapsed ? 'center' : 'stretch' }}>
             {/* Clock Widget */}
-            <div className="digital-clock-container">
-              <div className="digital-clock-label">Local System Time</div>
-              <div className="digital-clock">
-                {timeStr}
+            {!isSidebarCollapsed && (
+              <div className="digital-clock-container">
+                <div className="digital-clock-label">Local System Time</div>
+                <div className="digital-clock">
+                  {timeStr}
+                </div>
               </div>
-            </div>
+            )}
             
             {/* Tiny Core Status */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
-              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <Globe size={10} /> Online
-              </span>
-              <span>v1.0.0</span>
-            </div>
+            {!isSidebarCollapsed && (
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Globe size={10} /> Online
+                </span>
+                <span>v1.0.0</span>
+              </div>
+            )}
+
           </div>
         </aside>
 
@@ -788,6 +1080,85 @@ function App() {
             </div>
             
             <div className="header-status">
+              {/* Workspace Switcher Dropdown */}
+              <div className="workspace-switcher-container" ref={wsDropdownRef}>
+                <div 
+                  className="workspace-switcher-trigger"
+                  onClick={() => setIsWsDropdownOpen(!isWsDropdownOpen)}
+                  title="Switch or add local workspace"
+                >
+                  <FolderOpen size={13} style={{ color: 'var(--accent-mint)' }} />
+                  <span style={{ maxWidth: '140px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {workspace ? workspace.split(/[\\/]/).pop() : 'Select Workspace'}
+                  </span>
+                  <span style={{ fontSize: '9px', opacity: 0.6 }}>▼</span>
+                </div>
+
+                {isWsDropdownOpen && (
+                  <div className="workspace-switcher-dropdown">
+                    <div className="dropdown-header">Active Workspace</div>
+                    {workspaces.find(w => w.id === activeWorkspaceId) ? (
+                      <div className="dropdown-item active">
+                        <div className="dropdown-item-details">
+                          <div className="dropdown-item-header">
+                            <span className="status-dot active" style={{ width: '6px', height: '6px', margin: 0 }}></span>
+                            <span className="dropdown-item-name">{workspaces.find(w => w.id === activeWorkspaceId).name}</span>
+                          </div>
+                          <span className="dropdown-item-path" title={workspace}>{workspace}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div style={{ padding: '8px 14px', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                        No active workspace bound.
+                      </div>
+                    )}
+
+                    <div className="dropdown-divider"></div>
+                    
+                    <div className="dropdown-header">Recent Workspaces</div>
+                    <div style={{ maxHeight: '160px', overflowY: 'auto' }}>
+                      {workspaces.filter(w => w.id !== activeWorkspaceId).map(ws => (
+                        <div 
+                          key={ws.id}
+                          className="dropdown-item"
+                          onClick={() => selectAndLaunchWorkspace(ws)}
+                        >
+                          <div className="dropdown-item-details">
+                            <span className="dropdown-item-name">{ws.name}</span>
+                            <span className="dropdown-item-path" title={ws.path}>{ws.path}</span>
+                          </div>
+                          <button
+                            className="dropdown-item-remove-btn"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleRemoveWorkspace(ws.id);
+                            }}
+                            title={`Remove from history`}
+                          >
+                            <X size={10} />
+                          </button>
+                        </div>
+                      ))}
+                      {workspaces.filter(w => w.id !== activeWorkspaceId).length === 0 && (
+                        <div style={{ padding: '8px 14px', fontSize: '11px', color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                          No other recent history.
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="dropdown-divider"></div>
+                    
+                    <button 
+                      className="dropdown-action-btn"
+                      onClick={handleAddWorkspace}
+                    >
+                      <Plus size={12} />
+                      <span>Add Workspace...</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
               <div className="status-badge">
                 <Activity size={13} className="text-secondary" style={{ color: 'var(--accent-cyan)' }} />
                 <span>System CPU: {systemStats.cpu}%</span>
@@ -1003,16 +1374,29 @@ function App() {
                             <div>
                               <div style={{ fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase' }}>Context Memory</div>
                               <div style={{ fontSize: '12px', fontWeight: '600', color: '#fff', fontFamily: 'var(--font-mono)' }}>
-                                {agent.contextLimit > 0 ? `${(agent.contextUsed / 1000).toFixed(0)}k/${(agent.contextLimit / 1000).toFixed(0)}k` : 'N/A'}
+                                {agent.contextLimit > 0 && (
+                                  <div style={{ marginBottom: '6px' }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '8px', color: 'var(--text-muted)', marginBottom: '2px' }}>
+                                      <span>Context</span>
+                                      <span>{(agent.contextUsed / 1000).toFixed(0)}k/{(agent.contextLimit / 1000).toFixed(0)}k</span>
+                                    </div>
+                                    <div className="progress-bar-container" style={{ height: '3px', margin: 0 }}>
+                                      <div 
+                                        className="progress-bar" 
+                                        style={{ 
+                                          width: `${((agent.contextUsed) / agent.contextLimit) * 100}%`, 
+                                          background: color 
+                                        }}
+                                      ></div>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           </div>
 
                           {/* Retrieved Live Output Display */}
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', background: '#000b0f', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '6px', padding: '10px', fontFamily: 'var(--font-mono)', fontSize: '11px', flexGrow: 1, minHeight: '60px', maxHeight: '80px', overflow: 'hidden', marginBottom: '16px' }}>
-                            <div style={{ color: 'var(--text-muted)', fontSize: '9px', textTransform: 'uppercase', letterSpacing: '0.5px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px', marginBottom: '4px' }}>
-                              Live Terminal Stream
-                            </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', background: '#000b0f', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '4px', padding: '4px 6px', fontFamily: 'var(--font-mono)', fontSize: '9px', minHeight: '30px', maxHeight: '40px', overflow: 'hidden' }}>
                             <div style={{ color: agent.status === 'working' ? color : 'var(--text-secondary)', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                               &gt; {liveTerminalOutputs[`${activeWorkspaceId}:${agent.id}`] || 'Awaiting first command...'}
                             </div>
@@ -1325,6 +1709,140 @@ function App() {
               </div>
             )}
 
+            {/* TAB: WORKSPACE CUSTOMIZATION */}
+            {activeTab === 'customization' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '850px', margin: '0 auto', width: '100%' }}>
+                <div className="section-card">
+                  <h2 className="section-title" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', marginBottom: '20px' }}>
+                    <Sliders size={20} style={{ color: 'var(--accent-mint)' }} />
+                    <span>Terminal Style & Theme Customization</span>
+                  </h2>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '32px' }}>
+                    {/* Controls */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                      <div className="form-group">
+                        <label className="form-label" style={{ display: 'flex', justifyContent: 'space-between' }}>
+                          <span>Font Size</span>
+                          <span style={{ color: 'var(--accent-mint)', fontWeight: 'bold' }}>{terminalFontSize}px</span>
+                        </label>
+                        <input 
+                          type="range" 
+                          min="11" 
+                          max="20" 
+                          value={terminalFontSize}
+                          onChange={(e) => {
+                            const val = Number(e.target.value);
+                            setTerminalFontSize(val);
+                            localStorage.setItem('wefer_terminal_font_size', val);
+                          }}
+                          style={{ width: '100%', accentColor: 'var(--accent-mint)', cursor: 'pointer' }}
+                        />
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: 'var(--text-muted)' }}>
+                          <span>11px</span>
+                          <span>13px (Default)</span>
+                          <span>20px</span>
+                        </div>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Font Family</label>
+                        <select 
+                          className="form-control"
+                          value={terminalFontFamily}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setTerminalFontFamily(val);
+                            localStorage.setItem('wefer_terminal_font_family', val);
+                          }}
+                        >
+                          <option value="Fira Code">Fira Code (Monospace with ligatures)</option>
+                          <option value="Cascadia Mono">Cascadia Mono (Clean sans-serif monospace)</option>
+                          <option value="Cascadia Code">Cascadia Code (Cascadia with coding ligatures)</option>
+                          <option value="Source Code Pro">Source Code Pro (Clean coding font)</option>
+                          <option value="Courier New">Courier New (Classic typewriter style)</option>
+                          <option value="Consolas">Consolas (Windows developer font)</option>
+                        </select>
+                      </div>
+
+                      <div className="form-group">
+                        <label className="form-label">Color Theme</label>
+                        <select 
+                          className="form-control"
+                          value={terminalTheme}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setTerminalTheme(val);
+                            localStorage.setItem('wefer_terminal_theme', val);
+                          }}
+                        >
+                          <option value="dark-teal">Dark Teal (Wefer Default)</option>
+                          <option value="obsidian">Obsidian Black (Minimalist matte black)</option>
+                          <option value="cyberpunk">Cyberpunk Violet (Vibrant neon colors)</option>
+                          <option value="matrix">Matrix Console (Classic hacker neon green)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {/* Live Preview */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      <span className="form-label">Live Preview Console</span>
+                      <div 
+                        style={{ 
+                          flexGrow: 1, 
+                          borderRadius: '8px', 
+                          border: '1px solid var(--border-color)',
+                          padding: '16px',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          fontFamily: terminalFontFamily === 'Fira Code' ? "'Fira Code', monospace" : 
+                                      terminalFontFamily === 'Cascadia Mono' ? "'Cascadia Mono', monospace" : 
+                                      terminalFontFamily === 'Cascadia Code' ? "'Cascadia Code', monospace" : 
+                                      terminalFontFamily === 'Source Code Pro' ? "'Source Code Pro', monospace" :
+                                      terminalFontFamily === 'Courier New' ? "'Courier New', monospace" : "'Consolas', monospace",
+                          fontSize: `${terminalFontSize}px`,
+                          lineHeight: '1.4',
+                          background: terminalTheme === 'dark-teal' ? '#000b0f' : 
+                                      terminalTheme === 'obsidian' ? '#121212' : 
+                                      terminalTheme === 'cyberpunk' ? '#1a0826' : '#020a02',
+                          color: terminalTheme === 'dark-teal' ? '#c5d7df' : 
+                                 terminalTheme === 'obsidian' ? '#e0e0e0' : 
+                                 terminalTheme === 'cyberpunk' ? '#f0e6f5' : '#33ff33',
+                          minHeight: '220px',
+                          boxShadow: 'inset 0 0 10px rgba(0,0,0,0.5)',
+                          overflow: 'hidden'
+                        }}
+                      >
+                        <div style={{ color: 'var(--text-muted)', fontSize: '10px', textTransform: 'uppercase', marginBottom: '8px', borderBottom: '1px solid rgba(255,255,255,0.05)', paddingBottom: '4px' }}>
+                          Simulated Preview Output
+                        </div>
+                        <div>
+                          <span style={{ color: terminalTheme === 'cyberpunk' ? '#ff79c6' : terminalTheme === 'matrix' ? '#00ff00' : 'var(--accent-mint)' }}>wefer-system</span>:~$ agy init --gemini
+                        </div>
+                        <div style={{ margin: '4px 0 10px', opacity: 0.8 }}>
+                          [wefer] Initializing Antigravity CLI Daemon v2.0...<br />
+                          [wefer] Reading local workspace index: 45 files mapped.<br />
+                          [wefer] Connected successfully to Google Gemini models.
+                        </div>
+                        <div>
+                          <span style={{ color: terminalTheme === 'cyberpunk' ? '#ff79c6' : terminalTheme === 'matrix' ? '#00ff00' : 'var(--accent-mint)' }}>wefer-system</span>:~$ <span style={{ background: terminalTheme === 'cyberpunk' ? '#ff79c6' : terminalTheme === 'matrix' ? '#00ff00' : 'var(--accent-mint)', color: '#000', width: '8px', display: 'inline-block' }}>&nbsp;</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '24px', borderTop: '1px solid var(--border-color)', paddingTop: '16px' }}>
+                    <button 
+                      className="btn primary"
+                      onClick={() => setActiveTab('terminal')}
+                    >
+                      Apply & Open Terminal
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* TAB: TERMINAL WORKSPACE */}
             {activeTab === 'terminal' && (
               <div style={{ display: 'flex', gap: '16px', height: 'calc(100vh - 180px)', width: '100%' }}>
@@ -1362,6 +1880,16 @@ function App() {
                         <span className="status-dot active" style={{ width: '6px', height: '6px', margin: 0 }}></span>
                         Workspace Bound
                       </span>
+                      {activeWorkspaceId && (
+                        <button 
+                          className="btn"
+                          style={{ padding: '4px 10px', fontSize: '11px', height: '26px', background: 'rgba(148, 210, 189, 0.15)', border: '1px solid rgba(148, 210, 189, 0.3)', color: 'var(--accent-mint)' }}
+                          onClick={() => handleAddTerminalSlot(activeWorkspaceId)}
+                          title="Add new terminal window to grid (Max 6)"
+                        >
+                          <Plus size={12} /> Add Terminal
+                        </button>
+                      )}
                       <button 
                         className="btn secondary"
                         style={{ padding: '4px 10px', fontSize: '11px', height: '26px' }}
@@ -1372,7 +1900,7 @@ function App() {
                     </div>
                   </div>
 
-                  {/* Per-workspace 2x2 terminal grids. Each workspace's grid is
+                  {/* Per-workspace dynamic grid. Each workspace's grid is
                       mounted once on first visit and then hidden/shown via CSS —
                       no remounting means no PTY restarts when switching workspaces. */}
                   {workspaces.length === 0 && (
@@ -1383,6 +1911,12 @@ function App() {
                   {workspaces.map(ws => {
                     const wsSlots = slotsOf(ws.id);
                     const isActive = ws.id === activeWorkspaceId;
+                    
+                    // Responsive CSS grids sizing based on slot counts
+                    const slotsCount = wsSlots.length;
+                    const gridCols = slotsCount === 1 ? '1fr' : slotsCount === 2 ? '1fr 1fr' : (slotsCount === 3 || slotsCount === 5 || slotsCount === 6) ? '1fr 1fr 1fr' : '1fr 1fr';
+                    const gridRows = slotsCount <= 3 ? '1fr' : '1fr 1fr';
+
                     // Only render after first activation (lazy init avoids opening xterm in display:none).
                     if (!visitedWorkspaces.has(ws.id)) return null;
                     return (
@@ -1390,16 +1924,15 @@ function App() {
                         key={ws.id}
                         style={{
                           display: isActive ? 'grid' : 'none',
-                          gridTemplateColumns: 'repeat(2, 1fr)',
-                          gridTemplateRows: 'repeat(2, 1fr)',
+                          gridTemplateColumns: gridCols,
+                          gridTemplateRows: gridRows,
                           gap: '16px',
                           flexGrow: 1,
                           minHeight: 0,
                           height: '100%'
                         }}
                       >
-                        {[0, 1, 2, 3].map((index) => {
-                          const agentId = wsSlots[index];
+                        {wsSlots.map((agentId, index) => {
                           const sessionId = `${ws.id}:${agentId}`;
                           const agentObj = agents.find(a => a.id === agentId) || agents[0];
                           const shell = shellOfWs(ws.id, agentId);
@@ -1447,6 +1980,15 @@ function App() {
                             <div
                               key={index}
                               className="terminal-container"
+                              onDragOver={(e) => e.preventDefault()}
+                              onDragEnter={(e) => { e.preventDefault(); e.currentTarget.classList.add('drop-target'); }}
+                              onDragLeave={(e) => e.currentTarget.classList.remove('drop-target')}
+                              onDrop={(e) => {
+                                e.currentTarget.classList.remove('drop-target');
+                                if (draggedWsId === ws.id && draggedIndex !== null) {
+                                  swapTerminalSlots(ws.id, draggedIndex, index);
+                                }
+                              }}
                               style={{
                                 display: 'flex',
                                 flexDirection: 'column',
@@ -1458,20 +2000,29 @@ function App() {
                                 overflow: 'hidden'
                               }}
                             >
-                              {/* Grid Cell Header */}
+                              {/* Grid Cell Header (Drag Handle) */}
                               <div
                                 className="terminal-header"
+                                draggable="true"
+                                onDragStart={() => {
+                                  setDraggedIndex(index);
+                                  setDraggedWsId(ws.id);
+                                }}
                                 style={{
                                   padding: '6px 12px',
                                   display: 'flex',
                                   justifyContent: 'space-between',
                                   alignItems: 'center',
+                                  flexWrap: 'wrap',
+                                  gap: '8px',
                                   background: '#001219',
                                   borderBottom: '1px solid var(--border-color)',
-                                  flexShrink: 0
+                                  flexShrink: 0,
+                                  cursor: 'grab',
+                                  height: 'auto'
                                 }}
                               >
-                                <div className="terminal-title-group" style={{ gap: '8px' }}>
+                                <div className="terminal-title-group" style={{ gap: '8px', display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
                                   <span className={`status-dot ${agentObj.status === 'working' ? 'active' : ''}`} style={{ width: '6px', height: '6px' }}></span>
 
                                   {/* Animated Mascot in Grid Cell */}
@@ -1528,7 +2079,7 @@ function App() {
                                 </div>
 
                                 {/* Preset Buttons Tray */}
-                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                                <div style={{ display: 'flex', gap: '4px', alignItems: 'center', flexWrap: 'wrap' }}>
                                   {presets.map((p, pIdx) => (
                                     <button
                                       key={pIdx}
@@ -1541,7 +2092,7 @@ function App() {
                                   ))}
                                 </div>
 
-                                <div className="terminal-controls-right" style={{ gap: '6px' }}>
+                                <div className="terminal-controls-right" style={{ gap: '6px', display: 'flex', alignItems: 'center', flexWrap: 'wrap' }}>
                                   <button
                                     className="btn secondary"
                                     style={{ padding: '2px 6px', fontSize: '9px', height: '20px', borderRadius: '4px', border: '1px solid var(--border-color)', color: 'var(--accent-cyan)' }}
@@ -1558,11 +2109,20 @@ function App() {
                                     Clear
                                   </button>
                                   <button
-                                    className="btn danger"
+                                    className="btn secondary"
                                     style={{ padding: '2px 6px', fontSize: '9px', height: '20px', borderRadius: '4px' }}
                                     onClick={() => window.electronAPI?.killSession(sessionId)}
+                                    title="Kill session"
                                   >
                                     Kill
+                                  </button>
+                                  <button
+                                    className="btn danger"
+                                    style={{ padding: '2px 5px', height: '20px', borderRadius: '4px', fontSize: '10px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                                    onClick={() => handleKillTerminalSlot(ws.id, index)}
+                                    title="Close terminal window"
+                                  >
+                                    <X size={10} />
                                   </button>
                                 </div>
                               </div>
@@ -1578,6 +2138,9 @@ function App() {
                                   cwd={ws.path}
                                   cliAvailability={cliAvail}
                                   onStatusChange={handleSessionStatus}
+                                  fontSize={terminalFontSize}
+                                  fontFamily={terminalFontFamily}
+                                  themeName={terminalTheme}
                                 />
                               </div>
                             </div>
@@ -1590,7 +2153,7 @@ function App() {
 
                 {/* Right Section: Dashboard Sidebar (Context, metrics, and mascots) */}
                 <div style={{ 
-                  width: '320px', 
+                  width: isDashboardCollapsed ? '75px' : '320px', 
                   flexShrink: 0, 
                   display: 'flex', 
                   flexDirection: 'column', 
@@ -1598,104 +2161,161 @@ function App() {
                   background: 'rgba(0, 18, 25, 0.4)', 
                   border: '1px solid var(--border-color)', 
                   borderRadius: '10px', 
-                  padding: '16px', 
-                  overflowY: 'auto' 
+                  padding: isDashboardCollapsed ? '16px 8px' : '16px', 
+                  overflowY: isDashboardCollapsed ? 'visible' : 'auto',
+                  position: 'relative',
+                  zIndex: 50,
+                  transition: 'width 0.3s cubic-bezier(0.4, 0, 0.2, 1), padding 0.3s ease',
+                  alignItems: isDashboardCollapsed ? 'center' : 'stretch'
                 }}>
                   {/* Sidebar Header */}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', borderBottom: '1px solid rgba(10, 147, 150, 0.15)', paddingBottom: '10px', marginBottom: '4px' }}>
-                    <Activity size={16} style={{ color: 'var(--accent-mint)' }} />
-                    <span style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
-                      Dashboard Context
-                    </span>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(10, 147, 150, 0.15)', paddingBottom: '10px', marginBottom: '4px', width: '100%' }}>
+                    {!isDashboardCollapsed ? (
+                      <>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <Activity size={16} style={{ color: 'var(--accent-mint)' }} />
+                          <span style={{ fontSize: '11px', fontWeight: '700', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px' }}>
+                            Dashboard Context
+                          </span>
+                        </div>
+                        <button 
+                          className="btn secondary"
+                          style={{ padding: '2px 4px', height: '18px', background: 'transparent', border: 'none', color: 'var(--text-muted)' }}
+                          onClick={() => setIsDashboardCollapsed(true)}
+                          title="Collapse Panel"
+                        >
+                          <ChevronRight size={14} />
+                        </button>
+                      </>
+                    ) : (
+                      <button 
+                        className="btn secondary wefer-tooltip tooltip-left"
+                        data-tooltip="Expand Dashboard"
+                        style={{ padding: '4px', height: '24px', width: '24px', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto', background: 'transparent', border: 'none', color: 'var(--accent-mint)' }}
+                        onClick={() => setIsDashboardCollapsed(false)}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                    )}
                   </div>
 
                   {/* Metrics Grid */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-                    <div style={{ background: 'rgba(0, 30, 41, 0.6)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '10px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-                        <span>Tasks Run</span>
-                        <Terminal size={12} style={{ color: 'var(--accent-cyan)' }} />
+                  {!isDashboardCollapsed ? (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                      <div style={{ background: 'rgba(0, 30, 41, 0.6)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                          <span>Tasks Run</span>
+                          <Terminal size={12} style={{ color: 'var(--accent-cyan)' }} />
+                        </div>
+                        <div style={{ fontSize: '14px', fontWeight: '700', color: '#fff', fontFamily: 'var(--font-mono)' }}>{systemStats.commandsCount} runs</div>
                       </div>
-                      <div style={{ fontSize: '14px', fontWeight: '700', color: '#fff', fontFamily: 'var(--font-mono)' }}>{systemStats.commandsCount} runs</div>
-                    </div>
 
-                    <div style={{ background: 'rgba(0, 30, 41, 0.6)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '10px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
-                        <span>Active Agents</span>
-                        <Cpu size={12} style={{ color: 'var(--accent-mint)' }} />
-                      </div>
-                      <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--accent-mint)' }}>
-                        {agents.filter(a => a.status === 'working').length} / {agents.length}
+                      <div style={{ background: 'rgba(0, 30, 41, 0.6)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '10px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '9px', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                          <span>Active Agents</span>
+                          <Cpu size={12} style={{ color: 'var(--accent-mint)' }} />
+                        </div>
+                        <div style={{ fontSize: '14px', fontWeight: '700', color: 'var(--accent-mint)' }}>
+                          {agents.filter(a => a.status === 'working').length} / {agents.length}
+                        </div>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center', width: '100%' }}>
+                      <div 
+                        className="wefer-tooltip tooltip-left"
+                        data-tooltip={`Tasks Run: ${systemStats.commandsCount} operations`}
+                        style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'rgba(0, 30, 41, 0.6)', border: '1px solid rgba(10, 147, 150, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-cyan)' }}
+                      >
+                        <Terminal size={16} />
+                      </div>
+                      <div 
+                        className="wefer-tooltip tooltip-left"
+                        data-tooltip={`Active Agents: ${agents.filter(a => a.status === 'working').length} / ${agents.length}`}
+                        style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'rgba(0, 30, 41, 0.6)', border: '1px solid rgba(10, 147, 150, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-mint)' }}
+                      >
+                        <Cpu size={16} />
+                      </div>
+                    </div>
+                  )}
 
                   {/* CPU & Memory load stats */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(0, 30, 41, 0.3)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '10px' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontWeight: '600' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>CPU Load</span>
-                      <span style={{ color: 'var(--accent-cyan)' }}>{systemStats.cpu}%</span>
+                  {!isDashboardCollapsed ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(0, 30, 41, 0.3)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '10px' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontWeight: '600' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>CPU Load</span>
+                        <span style={{ color: 'var(--accent-cyan)' }}>{systemStats.cpu}%</span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontWeight: '600' }}>
+                        <span style={{ color: 'var(--text-secondary)' }}>RAM Usage</span>
+                        <span style={{ color: 'var(--accent-mint)' }}>{systemStats.memory} GB</span>
+                      </div>
                     </div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', fontWeight: '600' }}>
-                      <span style={{ color: 'var(--text-secondary)' }}>RAM Usage</span>
-                      <span style={{ color: 'var(--accent-mint)' }}>{systemStats.memory} GB</span>
+                  ) : (
+                    <div 
+                      className="wefer-tooltip tooltip-left"
+                      data-tooltip={`CPU: ${systemStats.cpu}% | RAM: ${systemStats.memory} GB`}
+                      style={{ display: 'flex', flexDirection: 'column', gap: '10px', background: 'rgba(0, 30, 41, 0.3)', border: '1px solid rgba(10, 147, 150, 0.15)', borderRadius: '8px', padding: '8px', alignItems: 'center', color: 'var(--accent-cyan)' }}
+                    >
+                      <Database size={16} />
                     </div>
-                  </div>
+                  )}
 
                   {/* Mascot cards list */}
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {[
-                      { id: 'claude-code', mascot: claudeMascot, color: 'var(--accent-orange)' },
-                      { id: 'antigravity-cli', mascot: geminiMascot, color: 'var(--accent-mint)' },
-                      { id: 'codex-cli', mascot: codexMascot, color: 'var(--accent-gold)' }
-                    ].map(({ id, mascot, color }) => {
-                      const agent = agents.find(a => a.id === id);
-                      if (!agent) return null;
-                      
-                      return (
-                        <div 
-                          key={agent.id}
-                          style={{ 
-                            display: 'flex', 
-                            flexDirection: 'column', 
-                            padding: '10px', 
-                            background: 'rgba(0, 30, 41, 0.4)', 
-                            border: `1px solid ${selectedAgentId === agent.id ? color : 'var(--border-color)'}`,
-                            borderRadius: '8px',
-                            position: 'relative',
-                            overflow: 'hidden'
-                          }}
-                        >
-                          <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '2.5px', background: color }}></div>
-                          
-                          <div style={{ display: 'flex', gap: '8px', marginBottom: '6px', alignItems: 'center' }}>
-                            <div 
-                              className={`mascot-avatar ${agent.status === 'working' ? 'animate-mascot-working' : ''}`}
-                              style={{ 
-                                width: '32px', 
-                                height: '32px', 
-                                borderRadius: '50%', 
-                                overflow: 'hidden', 
-                                border: `1.5px solid ${color}`, 
-                                flexShrink: 0,
-                                display: 'flex',
-                                justifyContent: 'center',
-                                alignItems: 'center',
-                                background: 'var(--bg-surface)',
-                                '--accent-color': color
-                              }}
-                            >
-                              <img src={mascot} alt={`${agent.name} Mascot`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  {!isDashboardCollapsed ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      {[
+                        { id: 'claude-code', mascot: claudeMascot, color: 'var(--accent-orange)' },
+                        { id: 'antigravity-cli', mascot: geminiMascot, color: 'var(--accent-mint)' },
+                        { id: 'codex-cli', mascot: codexMascot, color: 'var(--accent-gold)' }
+                      ].map(({ id, mascot, color }) => {
+                        const agent = agents.find(a => a.id === id);
+                        if (!agent) return null;
+                        
+                        return (
+                          <div 
+                            key={agent.id}
+                            style={{ 
+                              display: 'flex', 
+                              flexDirection: 'column', 
+                              padding: '10px', 
+                              background: 'rgba(0, 30, 41, 0.4)', 
+                              border: `1px solid ${selectedAgentId === agent.id ? color : 'var(--border-color)'}`,
+                              borderRadius: '8px',
+                              position: 'relative',
+                              overflow: 'hidden'
+                            }}
+                          >
+                            <div style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '2.5px', background: color }}></div>
+                            
+                            <div style={{ display: 'flex', gap: '8px', marginBottom: '6px', alignItems: 'center' }}>
+                              <div 
+                                className={`mascot-avatar ${agent.status === 'working' ? 'animate-mascot-working' : ''}`}
+                                style={{ 
+                                  width: '32px', 
+                                  height: '32px', 
+                                  borderRadius: '50%', 
+                                  overflow: 'hidden', 
+                                  border: `1.5px solid ${color}`, 
+                                  flexShrink: 0,
+                                  display: 'flex',
+                                  justifyContent: 'center',
+                                  alignItems: 'center',
+                                  background: 'var(--bg-surface)',
+                                  '--accent-color': color
+                                }}
+                              >
+                                <img src={mascot} alt={`${agent.name} Mascot`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              </div>
+                              <div style={{ flexGrow: 1, overflow: 'hidden' }}>
+                                <h3 style={{ fontSize: '11px', fontWeight: '700', color: '#fff', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.name}</h3>
+                                <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>{agent.platform}</span>
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                <span className={`status-dot ${agent.status === 'working' ? 'active' : ''}`} style={{ width: '4px', height: '4px', margin: 0 }}></span>
+                                <span style={{ fontSize: '8px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 'bold' }}>{agent.status}</span>
+                              </div>
                             </div>
-                            <div style={{ flexGrow: 1, overflow: 'hidden' }}>
-                              <h3 style={{ fontSize: '11px', fontWeight: '700', color: '#fff', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agent.name}</h3>
-                              <span style={{ fontSize: '9px', color: 'var(--text-secondary)' }}>{agent.platform}</span>
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                              <span className={`status-dot ${agent.status === 'working' ? 'active' : ''}`} style={{ width: '4px', height: '4px', margin: 0 }}></span>
-                              <span style={{ fontSize: '8px', color: 'var(--text-secondary)', textTransform: 'uppercase', fontWeight: 'bold' }}>{agent.status}</span>
-                            </div>
-                          </div>
 
                           {agent.contextLimit > 0 && (
                             <div style={{ marginBottom: '6px' }}>
@@ -1724,6 +2344,53 @@ function App() {
                       );
                     })}
                   </div>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', alignItems: 'center' }}>
+                      {[
+                        { id: 'claude-code', mascot: claudeMascot, color: 'var(--accent-orange)' },
+                        { id: 'antigravity-cli', mascot: geminiMascot, color: 'var(--accent-mint)' },
+                        { id: 'codex-cli', mascot: codexMascot, color: 'var(--accent-gold)' }
+                      ].map(({ id, mascot, color }) => {
+                        const agent = agents.find(a => a.id === id);
+                        if (!agent) return null;
+                        
+                        return (
+                          <div 
+                            key={agent.id}
+                            className="wefer-tooltip tooltip-left"
+                            data-tooltip={`${agent.name} (${agent.platform}) — ${agent.status.toUpperCase()}`}
+                            style={{ 
+                              position: 'relative',
+                              width: '36px',
+                              height: '36px',
+                              borderRadius: '50%',
+                              border: `1.5px solid ${selectedAgentId === agent.id ? color : 'var(--border-color)'}`,
+                              display: 'flex',
+                              justifyContent: 'center',
+                              alignItems: 'center',
+                              background: 'var(--bg-surface)',
+                              cursor: 'pointer'
+                            }}
+                            onClick={() => setSelectedAgentId(agent.id)}
+                          >
+                            <img src={mascot} alt={`${agent.name} Mascot`} style={{ width: '100%', height: '100%', borderRadius: '50%', objectFit: 'cover' }} />
+                            <span 
+                              className={`status-dot ${agent.status === 'working' ? 'active' : ''}`} 
+                              style={{ 
+                                position: 'absolute', 
+                                bottom: '-1px', 
+                                right: '-1px', 
+                                width: '6px', 
+                                height: '6px', 
+                                margin: 0, 
+                                border: '1px solid var(--bg-base)' 
+                              }}
+                            ></span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
