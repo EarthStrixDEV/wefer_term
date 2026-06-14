@@ -1,7 +1,45 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { execFile } = require('child_process');
 const os = require('os');
+
+// --- Application Settings (persisted) ------------------------------------------
+// Single JSON file in userData. Read SYNCHRONOUSLY at module load because the GPU
+// setting must be applied via app.disableHardwareAcceleration() before app ready.
+const SETTINGS_PATH = path.join(app.getPath('userData'), 'wefer-settings.json');
+const DEFAULT_SETTINGS = {
+  hardwareAcceleration: true,
+  alwaysOnTop: false,
+  persistWorkspace: true,
+  workspacePath: null,
+};
+
+function loadSettings() {
+  try {
+    if (fs.existsSync(SETTINGS_PATH)) {
+      return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')) };
+    }
+  } catch (err) {
+    console.error('[wefer] failed to read settings:', err.message);
+  }
+  return { ...DEFAULT_SETTINGS };
+}
+
+function saveSettings() {
+  try {
+    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(appSettings, null, 2), 'utf8');
+  } catch (err) {
+    console.error('[wefer] failed to write settings:', err.message);
+  }
+}
+
+let appSettings = loadSettings();
+
+// Apply GPU setting BEFORE app is ready (mandatory for this Electron API).
+if (appSettings.hardwareAcceleration === false) {
+  app.disableHardwareAcceleration();
+}
 
 // node-pty is a native module; surface a load failure to the UI instead of crashing.
 let pty = null;
@@ -56,10 +94,12 @@ function getCpuPercent() {
 // Value shape: { proc, shell } — shell is 'cmd' | 'powershell'.
 const sessions = new Map();
 
-// App-wide Workspace: every Session uses this as its cwd. Defaults to the user's
-// home directory (e.g. C:\Users\<name>) — a neutral system location, NOT the app
-// folder — until the user adds a workspace.
-let currentWorkspace = app.getPath('home');
+// App-wide Workspace: every Session uses this as its cwd. Restored from the
+// persisted settings when "remember workspace" is on; otherwise defaults to the
+// user's home directory (e.g. C:\Users\<name>) — a neutral system location.
+let currentWorkspace = (appSettings.persistWorkspace && appSettings.workspacePath)
+  ? appSettings.workspacePath
+  : app.getPath('home');
 
 // Resolve a shell choice to its spawn config. cmd is the default base.
 function shellConfig(shell) {
@@ -96,6 +136,9 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  // Apply persisted "always on top" preference.
+  mainWindow.setAlwaysOnTop(!!appSettings.alwaysOnTop);
 
   // Check if we are running in development mode
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
@@ -225,6 +268,14 @@ ipcMain.on('session-kill', (event, { sessionId }) => {
 
 // --- Workspace & CLI availability -------------------------------------------
 
+// Persist the workspace into settings when "remember workspace" is enabled.
+function rememberWorkspace() {
+  if (appSettings.persistWorkspace) {
+    appSettings.workspacePath = currentWorkspace;
+    saveSettings();
+  }
+}
+
 ipcMain.handle('get-workspace', () => ({ path: currentWorkspace }));
 
 ipcMain.handle('choose-workspace', async () => {
@@ -234,11 +285,13 @@ ipcMain.handle('choose-workspace', async () => {
   });
   if (result.canceled || result.filePaths.length === 0) return { canceled: true };
   currentWorkspace = result.filePaths[0];
+  rememberWorkspace();
   return { path: currentWorkspace };
 });
 
 ipcMain.handle('set-workspace', (event, path) => {
   currentWorkspace = path;
+  rememberWorkspace();
   return { path: currentWorkspace };
 });
 
@@ -253,4 +306,27 @@ ipcMain.handle('cli-availability', async () => {
     onPath('claude'), onPath('agy'), onPath('codex'),
   ]);
   return { claude, agy, codex };
+});
+
+// --- Application Settings IPC -----------------------------------------------
+
+ipcMain.handle('get-settings', () => ({ ...appSettings }));
+
+ipcMain.handle('set-settings', (event, patch) => {
+  appSettings = { ...appSettings, ...patch };
+  // Live-apply the settings that do NOT require a restart.
+  if ('alwaysOnTop' in patch && mainWindow) {
+    mainWindow.setAlwaysOnTop(!!appSettings.alwaysOnTop);
+  }
+  // Sync the remembered workspace with the opt-in/opt-out.
+  if (patch.persistWorkspace === false) appSettings.workspacePath = null;
+  if (patch.persistWorkspace === true) appSettings.workspacePath = currentWorkspace;
+  saveSettings();
+  return { ...appSettings };
+});
+
+// Restart to apply changes that take effect only at startup (e.g. GPU).
+ipcMain.on('restart-app', () => {
+  app.relaunch();
+  app.exit(0);
 });

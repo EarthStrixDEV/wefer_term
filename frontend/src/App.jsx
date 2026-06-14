@@ -25,13 +25,25 @@ import {
   FolderOpen,
   ChevronLeft,
   ChevronRight,
-  Menu
+  Menu,
+  Settings,
+  RotateCcw
 } from 'lucide-react';
 import TerminalView from './TerminalView';
 
 // Pure helper functions to satisfy React Compiler purity linter
 const getTimestampId = () => Date.now();
 const DEFAULT_GRID_SLOTS = ['claude-code', 'antigravity-cli', 'codex-cli', 'npm-server'];
+
+// Reusable CSS-only toggle switch (controlled).
+function ToggleSwitch({ checked, onChange }) {
+  return (
+    <label className="toggle-switch">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="toggle-slider" />
+    </label>
+  );
+}
 
 function App() {
   // Navigation tabs
@@ -86,6 +98,28 @@ function App() {
     });
     return unsub;
   }, []);
+
+  // Application Settings — persisted in main process (wefer-settings.json)
+  const [appSettings, setAppSettings] = useState({
+    hardwareAcceleration: true,
+    alwaysOnTop: false,
+    persistWorkspace: true,
+    workspacePath: null
+  });
+  const [restartHint, setRestartHint] = useState(false);
+
+  useEffect(() => {
+    if (!window.electronAPI?.getSettings) return;
+    window.electronAPI.getSettings().then(setAppSettings);
+  }, []);
+
+  const updateSetting = (patch, needsRestart = false) => {
+    setAppSettings(prev => ({ ...prev, ...patch }));
+    if (window.electronAPI?.setSettings) {
+      window.electronAPI.setSettings(patch).then(setAppSettings);
+    }
+    if (needsRestart) setRestartHint(true);
+  };
 
   // Agents list
   const [agents, setAgents] = useState([
@@ -923,25 +957,45 @@ function App() {
                   <div className="sidebar-brand-sub" style={{ marginTop: '2px', paddingLeft: '26px' }}>AI ORCHESTRATION HUB</div>
                 </>
               ) : (
-                <button 
-                  className="sidebar-toggler-hamberger wefer-tooltip tooltip-right"
-                  data-tooltip="Expand Sidebar"
-                  onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: 'var(--accent-mint)',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: '8px',
-                    borderRadius: '4px',
-                    transition: 'background 0.2s'
-                  }}
-                >
-                  <Menu size={18} />
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '8px' }}>
+                  <button 
+                    className="sidebar-toggler-hamberger wefer-tooltip tooltip-right"
+                    data-tooltip="Expand Sidebar"
+                    onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: 'var(--accent-mint)',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '8px',
+                      borderRadius: '4px',
+                      transition: 'background 0.2s'
+                    }}
+                  >
+                    <Menu size={18} />
+                  </button>
+                  <div 
+                    className="wefer-tooltip tooltip-right" 
+                    data-tooltip="Local System Time"
+                    style={{ 
+                      fontSize: '10px', 
+                      color: 'var(--accent-mint)', 
+                      fontWeight: 'bold', 
+                      fontFamily: 'var(--font-mono)', 
+                      background: 'rgba(10, 147, 150, 0.15)', 
+                      border: '1px solid rgba(10, 147, 150, 0.3)',
+                      padding: '4px 6px',
+                      borderRadius: '4px',
+                      textAlign: 'center',
+                      cursor: 'default'
+                    }}
+                  >
+                    {timeStr.slice(0, 5)}
+                  </div>
+                </div>
               )}
             </div>
 
@@ -973,13 +1027,22 @@ function App() {
                 {!isSidebarCollapsed && <span>Workspace Customization</span>}
               </div>
 
-              <div 
+              <div
                 className={`nav-item ${activeTab === 'terminal' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
                 data-tooltip={isSidebarCollapsed ? "Terminal Workspace" : undefined}
                 onClick={() => setActiveTab('terminal')}
               >
                 <Terminal size={16} />
                 {!isSidebarCollapsed && <span>Terminal Workspace</span>}
+              </div>
+
+              <div
+                className={`nav-item ${activeTab === 'settings' ? 'active' : ''} ${isSidebarCollapsed ? 'wefer-tooltip tooltip-right' : ''}`}
+                data-tooltip={isSidebarCollapsed ? "Application Settings" : undefined}
+                onClick={() => setActiveTab('settings')}
+              >
+                <Settings size={16} />
+                {!isSidebarCollapsed && <span>Settings</span>}
               </div>
             </nav>
 
@@ -1071,11 +1134,13 @@ function App() {
                 {activeTab === 'dashboard' && 'Operations Dashboard'}
                 {activeTab === 'agents' && 'Configure AI Agents'}
                 {activeTab === 'terminal' && 'Terminal Task Console'}
+                {activeTab === 'settings' && 'Application Settings'}
               </h1>
               <p>
                 {activeTab === 'dashboard' && 'Overview of active agents, context memory capacity, and CLI task metrics.'}
                 {activeTab === 'agents' && 'Configure presets and custom local agents for Multi-platform.'}
                 {activeTab === 'terminal' && 'Live action logs, command trigger inputs, and CLI output streams.'}
+                {activeTab === 'settings' && 'Manage application-level preferences — performance, window behavior, and workspace persistence.'}
               </p>
             </div>
             
@@ -1840,6 +1905,116 @@ function App() {
                     </button>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* TAB: APPLICATION SETTINGS */}
+            {activeTab === 'settings' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '24px', maxWidth: '850px', margin: '0 auto', width: '100%' }}>
+
+                {/* Card 1: Performance & Display */}
+                <div className="section-card">
+                  <h2 className="section-title" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', marginBottom: '4px' }}>
+                    <Zap size={20} style={{ color: 'var(--accent-mint)' }} />
+                    <span>Performance & Display</span>
+                  </h2>
+
+                  {/* Hardware Acceleration */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0', borderBottom: '1px solid var(--border-color)' }}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                      <Cpu size={18} style={{ color: 'var(--accent-cyan)', marginTop: '2px', flexShrink: 0 }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          Hardware Acceleration
+                          <span style={{ fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--accent-orange)', border: '1px solid var(--accent-orange)', borderRadius: '4px', padding: '1px 6px' }}>
+                            Restart
+                          </span>
+                        </div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          Use the GPU to render the interface. Disable if you experience graphical glitches. Requires a restart.
+                        </div>
+                      </div>
+                    </div>
+                    <ToggleSwitch
+                      checked={appSettings.hardwareAcceleration}
+                      onChange={(val) => updateSetting({ hardwareAcceleration: val }, true)}
+                    />
+                  </div>
+
+                  {/* Always on Top */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0' }}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                      <Maximize2 size={18} style={{ color: 'var(--accent-cyan)', marginTop: '2px', flexShrink: 0 }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Always on Top</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          Keep the Wefer window above all other windows. Applies instantly.
+                        </div>
+                      </div>
+                    </div>
+                    <ToggleSwitch
+                      checked={appSettings.alwaysOnTop}
+                      onChange={(val) => updateSetting({ alwaysOnTop: val })}
+                    />
+                  </div>
+                </div>
+
+                {/* Card 2: Workspace */}
+                <div className="section-card">
+                  <h2 className="section-title" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', marginBottom: '4px' }}>
+                    <FolderOpen size={20} style={{ color: 'var(--accent-mint)' }} />
+                    <span>Workspace</span>
+                  </h2>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 0' }}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                      <Database size={18} style={{ color: 'var(--accent-cyan)', marginTop: '2px', flexShrink: 0 }} />
+                      <div>
+                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Remember Last Workspace</div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                          Restore the last selected workspace folder on launch instead of resetting to the home directory.
+                        </div>
+                        <div style={{ fontSize: '11px', fontFamily: 'var(--font-mono)', color: 'var(--accent-mint)', marginTop: '6px', wordBreak: 'break-all' }}>
+                          {appSettings.persistWorkspace ? (appSettings.workspacePath || 'Not saved yet') : 'Disabled'}
+                        </div>
+                      </div>
+                    </div>
+                    <ToggleSwitch
+                      checked={appSettings.persistWorkspace}
+                      onChange={(val) => updateSetting({ persistWorkspace: val })}
+                    />
+                  </div>
+                </div>
+
+                {/* Card 3: Maintenance */}
+                <div className="section-card">
+                  <h2 className="section-title" style={{ borderBottom: '1px solid var(--border-color)', paddingBottom: '14px', marginBottom: '20px' }}>
+                    <RotateCcw size={20} style={{ color: 'var(--accent-mint)' }} />
+                    <span>Maintenance</span>
+                  </h2>
+
+                  {restartHint && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', background: 'rgba(238, 155, 0, 0.1)', border: '1px solid var(--accent-orange)', borderRadius: '8px', padding: '10px 14px', marginBottom: '16px', fontSize: '13px', color: 'var(--accent-gold)' }}>
+                      <Info size={16} style={{ color: 'var(--accent-orange)', flexShrink: 0 }} />
+                      <span>Restart required to apply hardware acceleration changes.</span>
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                      Relaunch the application to apply restart-required settings.
+                    </div>
+                    <button
+                      className="btn"
+                      onClick={() => window.electronAPI?.restartApp?.()}
+                      style={{ flexShrink: 0 }}
+                    >
+                      <RotateCcw size={14} />
+                      Restart Application
+                    </button>
+                  </div>
+                </div>
+
               </div>
             )}
 
