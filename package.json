@@ -1,0 +1,25 @@
+{
+  "name": "wefer_term",
+  "version": "1.0.0",
+  "description": "",
+  "main": "main.js",
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix frontend\" \"wait-on tcp:5173 && electron .\"",
+    "start": "electron .",
+    "build-frontend": "npm run build --prefix frontend",
+    "rebuild": "electron-rebuild -f -w node-pty"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
+    "concurrently": "^10.0.3",
+    "electron": "^41.7.1",
+    "wait-on": "^9.0.10"
+  },
+  "dependencies": {
+    "node-pty": "^1.1.0"
+  }
+}
