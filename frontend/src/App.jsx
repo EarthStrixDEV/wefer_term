@@ -499,7 +499,7 @@ function App() {
     setGridSlotsByWs(prev => {
       const currentSlots = prev[wsId] ?? [...DEFAULT_GRID_SLOTS];
       if (currentSlots.length <= 1) {
-        alert("ต้องมีอย่างน้อย 1 ช่อง Terminal นะคะ!");
+        alert("ต้องมีอย่างน้อย 1 ช่อง Terminal นะค่า!");
         return prev;
       }
       const agentId = currentSlots[index];
@@ -1261,7 +1261,7 @@ function App() {
                       <span>Wefer AI Cafe Orchestrator</span>
                     </h2>
                     <p style={{ color: 'var(--text-secondary)', fontSize: '14px', lineHeight: '1.6', marginBottom: '20px' }}>
-                      ยินดีต้อนรับสู่ระบบสั่งการ AI CLI คาเฟ่ค่ะ! มาสคอตบาริสต้า Chibi สุดน่ารักกำลังรันกระบวนการของแต่ละ CLI อยู่เบื้องหลังอย่างขยันขันแข็งเลยนะคะ~
+                      ยินดีต้อนรับสู่ระบบสั่งการ AI CLI คาเฟ่ค่ะ! มาสคอตบาริสต้า Chibi สุดน่ารักกำลังรันกระบวนการของแต่ละ CLI อยู่เบื้องหลังอย่างขยันขันแข็งเลยนะค่ะ~
                     </p>
                     
                     {/* Process steps display */}
