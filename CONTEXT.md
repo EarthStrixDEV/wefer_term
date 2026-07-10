@@ -1,6 +1,6 @@
-# Wefer AI Orchestrator
+# CONTEXT.md
 
-A desktop control panel (Electron + React) for dispatching one-shot CLI commands to AI coding tools (Claude Code, Gemini CLI, Codex CLI) and streaming their output into per-agent terminal views.
+**Wefer AI Orchestrator** — a desktop control panel (Electron + React) for dispatching one-shot CLI commands to AI coding tools (Claude Code, Gemini CLI, Codex CLI) and streaming their output into per-agent terminal views.
 
 ## Language
 
